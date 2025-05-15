@@ -1,15 +1,21 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import List
-import openai
+from openai import OpenAI
 import os
+from dotenv import load_dotenv
 
 # Load API Key from environment variable (Vercel secure environment)
+load_dotenv(override=True)
+
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 if not OPENAI_API_KEY:
     raise RuntimeError("Set the OPENAI_API_KEY in Vercel Environment Variables.")
 
-openai.api_key = OPENAI_API_KEY
+client = OpenAI(
+    # This is the default and can be omitted
+    api_key=os.environ.get("OPENAI_API_KEY"),
+)
 
 app = FastAPI()
 
@@ -32,7 +38,7 @@ async def summarize(request: SummarizationRequest):
         prompt_text += f"- **{newsletter.subject}** from *{newsletter.sender}*:\n{newsletter.content}\n\n"
 
     # Call GPT-4 for summarization
-    response = openai.ChatCompletion.create(
+    response = client.chat.completions.create(
         model="gpt-3.5-turbo",  # Change to "gpt-3.5-turbo" for cheaper option
         messages=[
             {"role": "system", "content": "You are an expert newsletter curator."},
