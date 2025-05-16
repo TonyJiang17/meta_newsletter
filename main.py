@@ -1,12 +1,27 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query, Request, Depends
 from pydantic import BaseModel
-from typing import List
+from typing import List, Optional
 from openai import OpenAI
 import os
 from dotenv import load_dotenv
+import datetime as dt
+import logging
+import requests
+from google.oauth2.credentials import Credentials
+from google.auth.transport.requests import Request as GoogleRequest
+from google_auth_oauthlib.flow import InstalledAppFlow
 
 # Load API Key from environment variable (Vercel secure environment)
 load_dotenv(override=True)
+
+GMAIL_CLIENT_ID = os.getenv("GMAIL_CLIENT_ID")
+GMAIL_CLIENT_SECRET = os.getenv("GMAIL_CLIENT_SECRET")
+GMAIL_REFRESH_TOKEN = os.getenv("GMAIL_REFRESH_TOKEN")
+GMAIL_API_TOKEN_URL = "https://oauth2.googleapis.com/token"
+GMAIL_API_SCOPE = "https://www.googleapis.com/auth/gmail.readonly"
+
+if not GMAIL_CLIENT_ID or not GMAIL_CLIENT_SECRET or not GMAIL_REFRESH_TOKEN:
+    raise RuntimeError("Set GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET, and GMAIL_REFRESH_TOKEN in Vercel Environment Variables.")
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 if not OPENAI_API_KEY:
@@ -18,6 +33,7 @@ client = OpenAI(
 )
 
 app = FastAPI()
+log = logging.getLogger("uvicorn.error")  # works on Vercel’s standard logger
 
 class Newsletter(BaseModel):
     subject: str
@@ -50,3 +66,65 @@ async def summarize(request: SummarizationRequest):
 
     summary = response.choices[0].message.content.strip()
     return {"summary": summary}
+
+
+##### Approach #2: Scheduled Task in GPT
+#Gmail API Auth Helpers
+def get_gmail_access_token():
+    """Fetches an access token using the refresh token."""
+    data = {
+        "client_id": GMAIL_CLIENT_ID,
+        "client_secret": GMAIL_CLIENT_SECRET,
+        "refresh_token": GMAIL_REFRESH_TOKEN,
+        "grant_type": "refresh_token"
+    }
+    response = requests.post(GMAIL_API_TOKEN_URL, data=data)
+    if response.status_code == 200:
+        return response.json().get("access_token")
+    else:
+        raise HTTPException(status_code=500, detail="Failed to get Gmail access token.")
+
+
+@app.get("/grab-newsletters")
+async def grab_newsletters(hours_back: int = Query(24, ge=1, le=168)):
+    """
+    Fetch newsletters from Gmail labeled 'newsletters' within the last `hours_back` hours.
+    """
+    access_token = get_gmail_access_token()
+    headers = {"Authorization": f"Bearer {access_token}"}
+    
+    # Set the query to only fetch emails with the "newsletter" label in the last 24 hours
+    since = (dt.datetime.utcnow() - dt.timedelta(hours=hours_back)).strftime("%Y/%m/%d")
+    query = f"label:newsletter after:{since}"
+    gmail_api_url = "https://gmail.googleapis.com/gmail/v1/users/me/messages"
+    response = requests.get(gmail_api_url, headers=headers, params={"q": query})
+    if response.status_code != 200:
+        raise HTTPException(status_code=500, detail="Failed to fetch newsletters from Gmail.")
+    
+    messages = response.json().get("messages", [])
+    if not messages:
+        return {"newsletters": []}
+
+    newsletters = []
+    for message in messages[:10]:  # Limit to 10 for safety
+        message_id = message.get("id")
+        msg_detail_url = f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{message_id}"
+        msg_response = requests.get(msg_detail_url, headers=headers)
+        msg_data = msg_response.json()
+        
+        snippet = msg_data.get("snippet", "")
+        headers = msg_data.get("payload", {}).get("headers", [])
+        subject = next((h['value'] for h in headers if h['name'] == 'Subject'), "No Subject")
+        sender = next((h['value'] for h in headers if h['name'] == 'From'), "Unknown Sender")
+
+        newsletters.append({
+            "subject": subject,
+            "sender": sender,
+            "content": snippet
+        })
+    
+    return {"newsletters": newsletters}
+
+@app.get("/healthz")
+async def health():
+    return {"status": "ok"}
