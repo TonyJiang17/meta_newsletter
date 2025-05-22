@@ -1,6 +1,6 @@
 from fastapi import FastAPI, HTTPException, Query, Request, Depends
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from openai import OpenAI
 import os
 from dotenv import load_dotenv
@@ -43,29 +43,63 @@ class Newsletter(BaseModel):
 class SummarizationRequest(BaseModel):
     newsletters: List[Newsletter]
 
-@app.post("/summarize")
-async def summarize(request: SummarizationRequest):
-    if not request.newsletters:
-        raise HTTPException(status_code=400, detail="No newsletters provided")
+# @app.post("/summarize")
+# async def summarize(request: SummarizationRequest):
+#     if not request.newsletters:
+#         raise HTTPException(status_code=400, detail="No newsletters provided")
 
-    # Build the text prompt for GPT-4
-    prompt_text = "Summarize the following newsletters into a clean, readable digest:\n\n"
-    for newsletter in request.newsletters:
-        prompt_text += f"- **{newsletter.subject}** from *{newsletter.sender}*:\n{newsletter.content}\n\n"
+#     # Build the text prompt for GPT-4
+#     prompt_text = "Summarize the following newsletters into a clean, readable digest:\n\n"
+#     for newsletter in request.newsletters:
+#         prompt_text += f"- **{newsletter.subject}** from *{newsletter.sender}*:\n{newsletter.content}\n\n"
 
-    # Call GPT-4 for summarization
-    response = client.chat.completions.create(
-        model="gpt-3.5-turbo",  # Change to "gpt-3.5-turbo" for cheaper option
+#     # Call GPT-4 for summarization
+#     response = client.chat.completions.create(
+#         model="gpt-3.5-turbo",  # Change to "gpt-3.5-turbo" for cheaper option
+#         messages=[
+#             {"role": "system", "content": "You are an expert newsletter curator."},
+#             {"role": "user", "content": prompt_text},
+#         ],
+#         max_tokens=700,
+#         temperature=0.5,
+#     )
+
+#     summary = response.choices[0].message.content.strip()
+#     return {"summary": summary}
+
+class SummarizationResponse(BaseModel):
+    tldr: List[str]
+    topics: List[Dict[str, Any]]
+
+@app.post("/summarize", response_model=SummarizationResponse)
+async def summarize(req: SummarizationRequest):
+    if not req.newsletters:
+        raise HTTPException(400, "No newsletters provided")
+
+    #–– Build the prompt ––#
+    prompt = "You are an expert curator. " \
+             "Group the news below into THEMES (e.g. Markets, Tech & AI, Global). " \
+             "For each theme list key stories as JSON:\n\n"
+    for n in req.newsletters:
+        prompt += f"- From {n.sender}: {n.subject}\n{n.content[:1000]}\n\n"
+
+    completion = client.chat.completions.create(
+        model="gpt-3.5-turbo",#"gpt-4o-mini",
         messages=[
-            {"role": "system", "content": "You are an expert newsletter curator."},
-            {"role": "user", "content": prompt_text},
+            {"role":"system","content":
+             "Return STRICT JSON with keys tldr (array of 3-6 bullets) "
+             "and topics (array of objects {name, items:[{headline,source}]})"},
+            {"role":"user","content":prompt}
         ],
-        max_tokens=700,
-        temperature=0.5,
+        temperature=0.4,
+        max_tokens=900
     )
 
-    summary = response.choices[0].message.content.strip()
-    return {"summary": summary}
+    # Parse JSON safely
+    import json, re
+    json_text = re.search(r'\{.*\}', completion.choices[0].message.content, re.S).group(0)
+    data = json.loads(json_text)
+    return data
 
 
 ##### Approach #2: Scheduled Task in GPT
