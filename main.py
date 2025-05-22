@@ -78,13 +78,13 @@ async def summarize(req: SummarizationRequest):
 
     #–– Build the prompt ––#
     prompt = "You are an expert curator. " \
-             "Group the news below into THEMES (e.g. Markets, Tech & AI, Global). " \
-             "For each theme list key stories as JSON:\n\n"
+             "Group the news below into THEMES or TOPICS (e.g. Markets, Tech & AI, Global). " \
+             "For each theme, list key stories as JSON:\n\n"
     for n in req.newsletters:
         prompt += f"- From {n.sender}: {n.subject}\n{n.content[:1000]}\n\n"
 
     completion = client.chat.completions.create(
-        model="gpt-3.5-turbo",#"gpt-4o-mini",
+        model="gpt-4.1-mini",
         messages=[
             {"role":"system","content":
              "Return STRICT JSON with keys tldr (array of 3-6 bullets) "
