@@ -10,6 +10,7 @@ import requests
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request as GoogleRequest
 from google_auth_oauthlib.flow import InstalledAppFlow
+import json, re
 
 # Load API Key from environment variable (Vercel secure environment)
 load_dotenv(override=True)
@@ -72,33 +73,83 @@ class SummarizationResponse(BaseModel):
     topics: List[Dict[str, Any]]
 
 @app.post("/summarize", response_model=SummarizationResponse)
+# async def summarize(req: SummarizationRequest):
+#     if not req.newsletters:
+#         raise HTTPException(400, "No newsletters provided")
+
+#     #–– Build the prompt ––#
+#     prompt = "You are an expert curator. " \
+#              "Group the news below into THEMES or TOPICS (e.g. Markets, Tech & AI, Global). " \
+#              "For each theme, list key stories as JSON:\n\n"
+#     for n in req.newsletters:
+#         prompt += f"- From {n.sender}: {n.subject}\n{n.content[:]}\n\n"
+
+#     completion = client.chat.completions.create(
+#         model="gpt-4.1-mini",
+#         messages=[
+#             {"role":"system","content":
+#              "Return STRICT JSON with keys tldr (array of 3-6 bullets) "
+#              "and topics (array of objects {name, items:[{headline,source}]})"},
+#             {"role":"user","content":prompt}
+#         ],
+#         temperature=0.4,
+#         max_tokens=900
+#     )
+
+#     # Parse JSON safely
+#     import json, re
+#     json_text = re.search(r'\{.*\}', completion.choices[0].message.content, re.S).group(0)
+#     data = json.loads(json_text)
+#     return data
+
 async def summarize(req: SummarizationRequest):
     if not req.newsletters:
         raise HTTPException(400, "No newsletters provided")
 
-    #–– Build the prompt ––#
-    prompt = "You are an expert curator. " \
-             "Group the news below into THEMES or TOPICS (e.g. Markets, Tech & AI, Global). " \
-             "For each theme, list key stories as JSON:\n\n"
-    for n in req.newsletters:
-        prompt += f"- From {n.sender}: {n.subject}\n{n.content[:1000]}\n\n"
-
-    completion = client.chat.completions.create(
-        model="gpt-4.1-mini",
-        messages=[
-            {"role":"system","content":
-             "Return STRICT JSON with keys tldr (array of 3-6 bullets) "
-             "and topics (array of objects {name, items:[{headline,source}]})"},
-            {"role":"user","content":prompt}
-        ],
-        temperature=0.4,
-        max_tokens=900
+    # --- Prompt construction ---
+    prompt = (
+        "You are an expert newsletter curator. Your job is to read newsletters from multiple sources and:\n"
+        "1. Summarize the most important insights or stories as TL;DR bullets (short, ≤18 words each, paraphrased).\n"
+        "2. Then group individual stories into relevant THEMES (e.g. Tech, Markets, Policy) as structured JSON.\n\n"
+        "Output format (strict JSON):\n"
+        "{\n"
+        "  \"tldr\": [\"...\", \"...\"],\n"
+        "  \"topics\": [\n"
+        "    {\"name\": \"Theme Name\", \"items\": [\n"
+        "      {\"headline\": \"Story headline (max 140 chars)\", \"source\": \"Newsletter name\" },\n"
+        "      ...\n"
+        "    ]}\n"
+        "  ]\n"
+        "}\n\n"
+        "Rules:\n"
+        "- TL;DR bullets must be unique and paraphrased (not repeated from headlines).\n"
+        "- Each topic should more details regarding the story. Overlap with the TL;DR bullets is okay.\n"
+        "- Headline + source only; no extra fields.\n"
+        "- Never include explanations, markdown, or commentary outside the JSON block.\n\n"
+        "Newsletters:\n\n"
     )
 
-    # Parse JSON safely
-    import json, re
-    json_text = re.search(r'\{.*\}', completion.choices[0].message.content, re.S).group(0)
-    data = json.loads(json_text)
+    for n in req.newsletters:
+        prompt += f"\n---\nFrom: {n.sender} | Subject: {n.subject}\n{n.content[:]}\n"
+
+    # --- LLM call ---
+    response = client.chat.completions.create(
+        model="gpt-4o",  # Or gpt-4.1-mini if needed
+        messages=[
+            {"role": "system", "content": "You are a newsletter curator. Output valid JSON only."},
+            {"role": "user", "content": prompt}
+        ],
+        temperature=0.5,
+        max_tokens=5000
+    )
+
+    # --- Parse the JSON safely ---
+    try:
+        json_text = re.search(r'\{.*\}', response.choices[0].message.content, re.S).group(0)
+        data = json.loads(json_text)
+    except Exception as e:
+        raise HTTPException(500, f"Failed to parse JSON from GPT: {e}")
+
     return data
 
 
