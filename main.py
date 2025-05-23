@@ -113,8 +113,8 @@ async def summarize(req: SummarizationRequest):
         "Each bullet should be ≤ 18 words and must *not* be copy-pasted from the detailed stories.\n"
         "\n"
         "2. Then, find the most important stories and insights from newsletters. Group and write them into relevant THEMES (e.g., Tech, Markets, Policy, etc). Please have no more than 5 themes. If more than 5 is needed, make the 5th theme 'Miscellaneous'.\n"
-        "   - Each story item must begin with a **short bolded header** in square brackets, followed by 2–3 sentences of summary.\n"
-        "   - Each story in each theme should be a **detailed multi-sentence summary**, ~3 sentences.\n"
+        "   - Each story item must begin with a **short bolded header**.\n"
+        "   - Each story in each theme should then be described using a detailed multi-sentence summary, ~3-4 sentences.\n"
         "   - Each story must include context, outcome, significance, and optionally source attribution.\n"
         "   - No bullet points in this section; use full sentences.\n"
         "Output format (strict JSON):\n"
@@ -122,13 +122,13 @@ async def summarize(req: SummarizationRequest):
         "  \"tldr\": [\"...\", \"...\"],\n"
         "  \"topics\": [\n"
         "    {\"name\": \"Theme Name\", \"items\": [\n"
-        "      { \"headline\": \"[Header] Full summary sentence(s)...\", \"source\": \"Source Name\" },\n"
+        "      { \"headline\": \"Header...\", \"summary\": \"Full summary sentence(s)...\", \"source\": \"Source Name\" },\n"
         "      ...\n"
         "    ]}\n"
         "  ]\n"
         "}\n\n"
         "Rules:\n"
-        "- Each newsletter source should be considered separately and must be represented in the output, meaning some stories from each source should be shown in the topics section.\n"
+        "- Each newsletter source should be considered separately. Some stories from each newsletter source must be shown in the topics section.\n"
         "- TL;DR bullets must be unique and paraphrased (not repeated from headlines).\n"
         "- Each theme's stories should contain details than the TL;DR bullets. Overlap with the TL;DR bullets is okay.\n"
         "- Headline + source only; no extra fields.\n"
@@ -141,7 +141,7 @@ async def summarize(req: SummarizationRequest):
 
     # --- LLM call ---
     response = client.chat.completions.create(
-        model="gpt-4o",  # Or gpt-4.1-mini if needed
+        model="gpt-4.1",  # Or gpt-4.1-mini if needed
         messages=[
             {"role": "system", "content": "You are a newsletter curator. Output valid JSON only."},
             {"role": "user", "content": prompt}
