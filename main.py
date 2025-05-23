@@ -112,9 +112,9 @@ async def summarize(req: SummarizationRequest):
         "1. Write a TL;DR with 4–6 *concise*, single-sentence bullets summarizing key takeaways or the most important news stories. "
         "Each bullet should be ≤ 18 words and must *not* be copy-pasted from the detailed stories.\n"
         "\n"
-        "2. Group the full stories into relevant THEMES (e.g., Tech, Markets, Policy, Science, Entertainment). Please have no more than 5 themes. If more than 5 is needed, make the 5th theme 'Miscellaneous'.\n"
-        "   - Each story should be a **detailed multi-sentence summary**, ~3–4 sentences.\n"
-        "   - Summaries must include context, outcome, significance, and optionally source attribution.\n"
+        "2. Then, find the most important stories and insights from newsletters. Group and write them into relevant THEMES (e.g., Tech, Markets, Policy, etc). Please have no more than 5 themes. If more than 5 is needed, make the 5th theme 'Miscellaneous'.\n"
+        "   - Each story in each theme should be a **detailed multi-sentence summary**, ~3 sentences.\n"
+        "   - Each story must include context, outcome, significance, and optionally source attribution.\n"
         "   - No bullet points in this section; use full sentences.\n"
         "Output format (strict JSON):\n"
         "{\n"
@@ -172,7 +172,24 @@ def get_gmail_access_token():
     if response.status_code == 200:
         return response.json().get("access_token")
     else:
+        print("Status:", response.status_code)
+        print("Text:", response.text)
         raise HTTPException(status_code=500, detail="Failed to get Gmail access token.")
+
+
+def extract_email_body(payload):
+    """Recursively extracts the plain text or HTML body from the payload."""
+    if 'parts' in payload:
+        for part in payload['parts']:
+            body = extract_email_body(part)
+            if body:
+                return body
+    elif payload.get("mimeType") in ["text/plain", "text/html"]:
+        data = payload.get("body", {}).get("data")
+        if data:
+            import base64
+            return base64.urlsafe_b64decode(data).decode("utf-8", errors="ignore")
+    return None
 
 
 @app.get("/grab-newsletters")
@@ -181,38 +198,48 @@ async def grab_newsletters(hours_back: int = Query(24, ge=1, le=168)):
     Fetch newsletters from Gmail labeled 'newsletters' within the last `hours_back` hours.
     """
     access_token = get_gmail_access_token()
-    headers = {"Authorization": f"Bearer {access_token}"}
-    
-    # Set the query to only fetch emails with the "newsletter" label in the last 24 hours
+    http_headers = {"Authorization": f"Bearer {access_token}"}
+
+    # Format time correctly for Gmail query
     since = (dt.datetime.utcnow() - dt.timedelta(hours=hours_back)).strftime("%Y/%m/%d")
     query = f"label:newsletter after:{since}"
+
+    # Fetch message list
     gmail_api_url = "https://gmail.googleapis.com/gmail/v1/users/me/messages"
-    response = requests.get(gmail_api_url, headers=headers, params={"q": query})
+    response = requests.get(gmail_api_url, headers=http_headers, params={"q": query})
     if response.status_code != 200:
         raise HTTPException(status_code=500, detail="Failed to fetch newsletters from Gmail.")
-    
+
     messages = response.json().get("messages", [])
     if not messages:
         return {"newsletters": []}
 
     newsletters = []
+
     for message in messages[:10]:  # Limit to 10 for safety
         message_id = message.get("id")
         msg_detail_url = f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{message_id}"
-        msg_response = requests.get(msg_detail_url, headers=headers)
+        msg_response = requests.get(msg_detail_url, headers=http_headers)
+
+        if msg_response.status_code != 200:
+            continue  # Skip this one and continue with the rest
+
         msg_data = msg_response.json()
+        #snippet = msg_data.get("snippet", "")
+        payload = msg_data.get("payload", {})
+        content = extract_email_body(payload) or "[No content found]"
         
-        snippet = msg_data.get("snippet", "")
-        headers = msg_data.get("payload", {}).get("headers", [])
-        subject = next((h['value'] for h in headers if h['name'] == 'Subject'), "No Subject")
-        sender = next((h['value'] for h in headers if h['name'] == 'From'), "Unknown Sender")
+        # Correct: Use a new variable so we don't overwrite http_headers
+        email_headers = msg_data.get("payload", {}).get("headers", [])
+        subject = next((h['value'] for h in email_headers if h['name'] == 'Subject'), "No Subject")
+        sender = next((h['value'] for h in email_headers if h['name'] == 'From'), "Unknown Sender")
 
         newsletters.append({
             "subject": subject,
             "sender": sender,
-            "content": snippet
+            "content": content
         })
-    
+
     return {"newsletters": newsletters}
 
 @app.get("/healthz")
